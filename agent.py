@@ -5,8 +5,10 @@ import logging
 import warnings
 from datetime import datetime
 from urllib.parse import urlparse
+import re
 from dotenv import load_dotenv
 from github import Github
+from github.GithubException import UnknownObjectException
 from slugify import slugify
 import schedule
 import time
@@ -54,18 +56,41 @@ def safe_db(query: str) -> str:
     return f"DB stub: {query}"
 
 def extract_title_description(content: str):
-    lines = content.strip().split('\n')
-    title = lines[0][:40].strip()
-    description = ''
-    for line in lines[1:]:
-        if len(line.strip()) > 40:
-            description = line.strip()[:140]
+    paragraphs = content.strip().split('\n')
+    raw_title = paragraphs[0].strip() if paragraphs else ""
+    title = re.sub(r'[^\w\s-]', '', raw_title).strip()
+
+    # Fallback if the first line is garbage
+    if not title or len(title.split()) < 3:
+        title = f"Smart Home Tips {datetime.utcnow().strftime('%Y%m%d')}"
+        logger.warning("⚠️ Fallback title used due to weak or missing heading.")
+
+    title = title[:80].strip()
+
+    # Description
+    description = ""
+    for para in paragraphs[1:]:
+        para = para.strip()
+        if len(para.split()) > 6:
+            description = para[:160].strip()
             break
-    return title, description
+    if not description:
+        description = "Tips and ideas for improving your smart home setup."
+
+    # Tag keywords
+    keywords = ["motion", "alexa", "home assistant", "privacy", "energy", "lighting", "routine",
+                "presence", "automation", "smart plug", "camera", "security", "sensor", "voice"]
+
+    content_lower = content.lower()
+    tags = sorted({word for word in keywords if word in content_lower})
+
+    return title, description, tags
+
+
+
+
 
 def safe_blog_post(content: str) -> str:
-    from base64 import b64encode
-
     token     = os.getenv('BLOG_PUSH_TOKEN')
     repo_name = os.getenv('BLOG_REPO')
     if repo_name and repo_name.startswith('http'):
@@ -77,27 +102,34 @@ def safe_blog_post(content: str) -> str:
     if not token or not repo_name:
         return 'Error: BLOG_PUSH_TOKEN or BLOG_REPO not set.'
 
-    title, description = extract_title_description(content)
-    slug       = slugify(title)
+    title, description, tags = extract_title_description(content)
+
+    slug_base = re.sub(r'[^\w\s-]', '', title).strip().lower()
+    slug = slugify(slug_base)[:60]
+    if not slug:
+        slug = f"smart-home-{datetime.utcnow().strftime('%Y%m%d')}"
+
+    logger.info(f"📄 Slug: {slug} | Title: {title}")
+
     date_str   = datetime.utcnow().date().isoformat()
     filename   = f"{posts_dir}/{date_str}-{slug}.mdx"
 
     frontmatter = (
-        f"---\n"
-        f"title: \"{title}\"\n"
-        f"description: \"{description}\"\n"
-        f"date: \"{datetime.utcnow().isoformat()}Z\"\n"
-        f"slug: \"{slug}\"\n"
-        f"published: true\n"
-        f"---\n\n"
-    )
+    f"---\n"
+    f"title: \"{title}\"\n"
+    f"description: \"{description}\"\n"
+    f"date: \"{datetime.utcnow().isoformat()}Z\"\n"
+    f"slug: \"{slug}\"\n"
+    f"published: true\n"
+    f"tags: {tags}\n"
+    f"---\n\n"
+)
     md_content = frontmatter + content
 
     gh = Github(token)
     repo = gh.get_repo(repo_name)
 
     try:
-        # Try to get the file first
         existing_file = repo.get_contents(filename, ref=branch)
         sha = existing_file.sha
         repo.update_file(
@@ -108,20 +140,17 @@ def safe_blog_post(content: str) -> str:
             branch=branch
         )
         return f"✅ Updated {filename} in {repo_name}@{branch}."
+    except UnknownObjectException:
+        repo.create_file(
+            path=filename,
+            message=f"Automated post: {title}",
+            content=md_content,
+            branch=branch
+        )
+        return f"✅ Created {filename} in {repo_name}@{branch}."
     except Exception as e:
-        if "404" in str(e):
-            # File does not exist — create it
-            repo.create_file(
-                path=filename,
-                message=f"Automated post: {title}",
-                content=md_content,
-                branch=branch
-            )
-            return f"✅ Created {filename} in {repo_name}@{branch}."
-        else:
-            logger.error('Publish error: %s', e)
-            return f"❌ Publish error: {e}"
-
+        logger.error('Publish error: %s', e)
+        return f"❌ Publish error: {e}"
 
 # === Trending Prompt Ideas ===
 trending_prompts = [
@@ -144,6 +173,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     prompt = args.question or random.choice(trending_prompts)
+    logger.info(f"📢 Prompt used: {prompt}")
 
     llm = ChatOpenAI(
         openai_api_key=API_KEY,
@@ -153,7 +183,7 @@ if __name__ == '__main__':
     )
 
     tools = [
-        Tool(name='Search', func=safe_search, description='Web search'),
+       # Tool(name='Search', func=safe_search, description='Web search'),
         Tool(name='Calendar', func=safe_calendar, description='Calendar stub'),
         Tool(name='Database', func=safe_db, description='Database stub'),
         Tool(name='BlogPost', func=safe_blog_post, description='Publish blog to GitHub')
@@ -167,22 +197,29 @@ if __name__ == '__main__':
         handle_parsing_errors=True
     )
 
-    def generate_publish():
-        logger.info('Generating blog post...')
-        try:
-            content = agent.run(prompt)
-            result = safe_blog_post(content)
-            logger.info(result)
-            print(result)
-        except Exception as e:
-            logger.error(f"Generation failed: {e}")
+def generate_publish(current_prompt):
+    logger.info('Generating blog post...')
+    try:
+        logger.info(f"Prompting agent with: {current_prompt}")
+        content = agent.run(current_prompt)
 
-    if args.schedule:
-        post_time = os.getenv('POST_TIME', '08:00')
-        schedule.every().day.at(post_time).do(generate_publish)
-        logger.info(f"Scheduled daily post at {post_time}")
-        while True:
-            schedule.run_pending()
-            time.sleep(60)
-    else:
-        generate_publish()
+        if not content or "i am sorry" in content.lower() or "i cannot" in content.lower():
+            logger.warning("⚠️ AI output was a refusal or empty. Skipping post.")
+            return
+
+        result = safe_blog_post(content)
+        logger.info(result)
+        print(result)
+    except Exception as e:
+        logger.error(f"Generation failed: {e}")
+
+
+if args.schedule:
+    post_time = os.getenv('POST_TIME', '08:00')
+    schedule.every().day.at(post_time).do(lambda: generate_publish(prompt))
+    logger.info(f"Scheduled daily post at {post_time}")
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
+else:
+    generate_publish(prompt)
