@@ -64,13 +64,15 @@ def extract_title_description(content: str):
     return title, description
 
 def safe_blog_post(content: str) -> str:
+    from base64 import b64encode
+
     token     = os.getenv('BLOG_PUSH_TOKEN')
     repo_name = os.getenv('BLOG_REPO')
+    if repo_name and repo_name.startswith('http'):
+        path = urlparse(repo_name).path
+        repo_name = path.strip('/')
     branch    = os.getenv('BLOG_BRANCH', 'main')
     posts_dir = os.getenv('BLOG_POSTS_DIR', 'content/posts')
-
-    if repo_name and repo_name.startswith('http'):
-        repo_name = urlparse(repo_name).path.strip('/')
 
     if not token or not repo_name:
         return 'Error: BLOG_PUSH_TOKEN or BLOG_REPO not set.'
@@ -89,22 +91,37 @@ def safe_blog_post(content: str) -> str:
         f"published: true\n"
         f"---\n\n"
     )
-
     md_content = frontmatter + content
 
+    gh = Github(token)
+    repo = gh.get_repo(repo_name)
+
     try:
-        gh = Github(token)
-        repo = gh.get_repo(repo_name)
-        repo.create_file(
+        # Try to get the file first
+        existing_file = repo.get_contents(filename, ref=branch)
+        sha = existing_file.sha
+        repo.update_file(
             path=filename,
-            message=f"Automated post: {title}",
+            message=f"Update post: {title}",
             content=md_content,
+            sha=sha,
             branch=branch
         )
-        return f"✅ Created {filename} in {repo_name}@{branch}."
+        return f"✅ Updated {filename} in {repo_name}@{branch}."
     except Exception as e:
-        logger.error(f"Publish error: {e}")
-        return f"❌ Publish error: {e}"
+        if "404" in str(e):
+            # File does not exist — create it
+            repo.create_file(
+                path=filename,
+                message=f"Automated post: {title}",
+                content=md_content,
+                branch=branch
+            )
+            return f"✅ Created {filename} in {repo_name}@{branch}."
+        else:
+            logger.error('Publish error: %s', e)
+            return f"❌ Publish error: {e}"
+
 
 # === Trending Prompt Ideas ===
 trending_prompts = [
