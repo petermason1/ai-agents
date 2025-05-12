@@ -1,0 +1,32 @@
+name: Auto Blog Post
+
+on:
+  schedule:
+    - cron: '0 8 * * *'  # 08:00 UTC daily (adjust for your timezone)
+  workflow_dispatch:
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone repo
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run agent
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          BASE_URL: ${{ secrets.BASE_URL }}
+          MODEL_ID: ${{ secrets.MODEL_ID }}
+          BLOG_PUSH_TOKEN: ${{ secrets.BLOG_PUSH_TOKEN }}
+          BLOG_REPO: ${{ secrets.BLOG_REPO }}
+          BLOG_BRANCH: ${{ secrets.BLOG_BRANCH }}
+          BLOG_POSTS_DIR: ${{ secrets.BLOG_POSTS_DIR }}
+        run: python agent.py
