@@ -45,6 +45,7 @@ from datetime import datetime
 import schedule
 import time
 import random
+from urllib.parse import urlparse
 
 # === Tool Implementations ===
 def safe_search(query: str) -> str:
@@ -63,17 +64,16 @@ def safe_db(query: str) -> str:
     return f"DB stub: {query}"
 
 def safe_blog_post(content: str) -> str:
-    token     = os.getenv('GITHUB_TOKEN')
-    repo_name = os.getenv('GITHUB_REPO')
+    token     = os.getenv('BLOG_PUSH_TOKEN')
+    repo_name = os.getenv('BLOG_REPO')
     if repo_name and repo_name.startswith('http'):
-        from urllib.parse import urlparse
         path = urlparse(repo_name).path
         repo_name = path.strip('/')
-    branch    = os.getenv('GITHUB_BRANCH', 'main')
-    posts_dir = os.getenv('POSTS_DIR', 'content/posts')
+    branch    = os.getenv('BLOG_BRANCH', 'main')
+    posts_dir = os.getenv('BLOG_POSTS_DIR', 'content/posts')
 
     if not token or not repo_name:
-        return 'Error: GITHUB_TOKEN or GITHUB_REPO not set.'
+        return 'Error: BLOG_PUSH_TOKEN or BLOG_REPO not set.'
 
     first_line = content.split('\n', 1)[0].strip()
     title      = first_line[:60]

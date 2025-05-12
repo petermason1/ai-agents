@@ -1,0 +1,6 @@
+python-dotenv
+langchain-openai
+langchain-community
+PyGithub
+python-slugify
+schedule
