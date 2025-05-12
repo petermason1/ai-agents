@@ -14,7 +14,6 @@ import schedule
 import time
 import random
 
-# === LangChain ===
 from langchain_openai import ChatOpenAI
 from langchain.agents import initialize_agent, Tool
 from langchain_community.tools import DuckDuckGoSearchRun
@@ -23,10 +22,9 @@ from langchain_community.tools import DuckDuckGoSearchRun
 warnings.filterwarnings('ignore', category=DeprecationWarning)
 load_dotenv()
 
-API_KEY       = os.getenv('GOOGLE_API_KEY')
-BASE_URL      = os.getenv('BASE_URL', 'https://generativelanguage.googleapis.com/v1beta/openai/')
-MODEL_ID      = os.getenv('MODEL_ID', 'gemini-2.5-flash-preview-04-17')
-SYSTEM_PROMPT = os.getenv('SYSTEM_PROMPT', 'You are a helpful assistant. Think step-by-step and use tools only when needed.')
+API_KEY = os.getenv('GOOGLE_API_KEY')
+BASE_URL = os.getenv('BASE_URL', 'https://generativelanguage.googleapis.com/v1beta/openai/')
+MODEL_ID = os.getenv('MODEL_ID', 'gemini-2.5-flash-preview-04-17')
 
 if not API_KEY:
     print("Error: GOOGLE_API_KEY not set.")
@@ -39,35 +37,36 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# === Helpers ===
-def safe_search(query: str) -> str:
-    try:
-        return DuckDuckGoSearchRun().run(query)
-    except Exception as e:
-        logger.error(f"Search error: {e}")
-        return f"Search error: {e}"
+# === SYSTEM PROMPT ===
+system_prompt = (
+    "You are an AI writing assistant. Always begin by reviewing your blog post title. "
+    "Make sure it is relevant, attention-grabbing, and **under 90 characters**. "
+    "Your output should be clean, direct, and suitable for posting on a smart home blog. "
+    "Include a short intro, clear sections, and useful takeaways."
+)
 
-def safe_calendar(action: str) -> str:
-    logger.info(f"Calendar stub: {action}")
-    return f"Calendar stub: {action}"
+llm = ChatOpenAI(
+    openai_api_key=API_KEY,
+    openai_api_base=BASE_URL,
+    model_name=MODEL_ID,
+    temperature=0.7,
+    max_tokens=1200,
+    system_message=system_prompt
+)
 
-def safe_db(query: str) -> str:
-    logger.info(f"DB stub: {query}")
-    return f"DB stub: {query}"
 
+# === Utility Functions ===
 def extract_title_description(content: str):
     paragraphs = content.strip().split('\n')
     raw_title = paragraphs[0].strip() if paragraphs else ""
     title = re.sub(r'[^\w\s-]', '', raw_title).strip()
 
-    # Fallback if the first line is garbage
     if not title or len(title.split()) < 3:
         title = f"Smart Home Tips {datetime.utcnow().strftime('%Y%m%d')}"
         logger.warning("⚠️ Fallback title used due to weak or missing heading.")
 
-    title = title[:80].strip()
+    title = title[:90].strip()
 
-    # Description
     description = ""
     for para in paragraphs[1:]:
         para = para.strip()
@@ -77,103 +76,106 @@ def extract_title_description(content: str):
     if not description:
         description = "Tips and ideas for improving your smart home setup."
 
-    # Tag keywords
-    keywords = ["motion", "alexa", "home assistant", "privacy", "energy", "lighting", "routine",
-                "presence", "automation", "smart plug", "camera", "security", "sensor", "voice"]
-
+    keywords = [
+        "motion", "alexa", "home assistant", "privacy", "energy", "lighting", "routine",
+        "presence", "automation", "smart plug", "camera", "security", "sensor", "voice"
+    ]
     content_lower = content.lower()
     tags = sorted({word for word in keywords if word in content_lower})
 
     return title, description, tags
 
-
-
-
-
 def safe_blog_post(content: str) -> str:
-    token     = os.getenv('BLOG_PUSH_TOKEN')
+    token = os.getenv('BLOG_PUSH_TOKEN')
     repo_name = os.getenv('BLOG_REPO')
     if repo_name and repo_name.startswith('http'):
-        path = urlparse(repo_name).path
-        repo_name = path.strip('/')
-    branch    = os.getenv('BLOG_BRANCH', 'main')
+        repo_name = urlparse(repo_name).path.strip('/')
+    branch = os.getenv('BLOG_BRANCH', 'main')
     posts_dir = os.getenv('BLOG_POSTS_DIR', 'content/posts')
 
     if not token or not repo_name:
         return 'Error: BLOG_PUSH_TOKEN or BLOG_REPO not set.'
 
     title, description, tags = extract_title_description(content)
-
-    slug_base = re.sub(r'[^\w\s-]', '', title).strip().lower()
-    slug = slugify(slug_base)[:60]
-    if not slug:
-        slug = f"smart-home-{datetime.utcnow().strftime('%Y%m%d')}"
-
-    logger.info(f"📄 Slug: {slug} | Title: {title}")
-
-    date_str   = datetime.utcnow().date().isoformat()
-    filename   = f"{posts_dir}/{date_str}-{slug}.mdx"
+    slug = slugify(title.lower())[:60] or f"smart-home-{datetime.utcnow().strftime('%Y%m%d')}"
+    filename = f"{posts_dir}/{datetime.utcnow().date().isoformat()}-{slug}.mdx"
 
     frontmatter = (
-    f"---\n"
-    f"title: \"{title}\"\n"
-    f"description: \"{description}\"\n"
-    f"date: \"{datetime.utcnow().isoformat()}Z\"\n"
-    f"slug: \"{slug}\"\n"
-    f"published: true\n"
-    f"tags: {tags}\n"
-    f"---\n\n"
-)
-    md_content = frontmatter + content
+        f"---\n"
+        f"title: \"{title}\"\n"
+        f"description: \"{description}\"\n"
+        f"date: \"{datetime.utcnow().isoformat()}Z\"\n"
+        f"slug: \"{slug}\"\n"
+        f"published: true\n"
+        f"tags: {tags}\n"
+        f"---\n\n"
+    )
 
     gh = Github(token)
     repo = gh.get_repo(repo_name)
+    md_content = frontmatter + content
 
     try:
-        existing_file = repo.get_contents(filename, ref=branch)
-        sha = existing_file.sha
-        repo.update_file(
-            path=filename,
-            message=f"Update post: {title}",
-            content=md_content,
-            sha=sha,
-            branch=branch
-        )
-        return f"✅ Updated {filename} in {repo_name}@{branch}."
+        existing = repo.get_contents(filename, ref=branch)
+        repo.update_file(filename, f"Update post: {title}", md_content, existing.sha, branch=branch)
+        return f"✅ Updated {filename}"
     except UnknownObjectException:
-        repo.create_file(
-            path=filename,
-            message=f"Automated post: {title}",
-            content=md_content,
-            branch=branch
-        )
-        return f"✅ Created {filename} in {repo_name}@{branch}."
+        repo.create_file(filename, f"New post: {title}", md_content, branch=branch)
+        return f"✅ Created {filename}"
     except Exception as e:
-        logger.error('Publish error: %s', e)
+        logger.error(f"❌ Publish error: {e}")
         return f"❌ Publish error: {e}"
 
-# === Trending Prompt Ideas ===
-trending_prompts = [
-    "Top 5 smart home trends in 2025",
-    "Why Home Assistant beats Alexa for privacy",
-    "How to set up smart routines with motion sensors",
-    "Voice-controlled lighting: pros and cons",
-    "Energy-saving automation tips for beginners",
-    "How to use presence detection with smart plugs",
-    "Best security automations for your smart home"
-]
+# === Agent Execution ===
+def generate_publish(prompt: str, retries=5):
+    logger.info("Generating blog post...")
+    for attempt in range(1, retries + 1):
+        try:
+            logger.info(f"Prompting agent with: {prompt}")
+            content = agent.run(prompt)
+            if not content or "i am sorry" in content.lower() or "i cannot" in content.lower():
+                logger.warning(f"⚠️ AI output was a refusal or empty. Retrying (Attempt {attempt})...")
+                continue
+            result = safe_blog_post(content)
+            logger.info(result)
+            print(result)
+            break
+        except Exception as e:
+            logger.error(f"⚠️ Generation attempt {attempt} failed: {e}")
 
-# === Main ===
+# === CLI + Scheduler ===
 if __name__ == '__main__':
     import argparse
-
-    parser = argparse.ArgumentParser(description='Run AI smart home blog agent')
-    parser.add_argument('-q', '--question', type=str, help='Prompt for the blog post')
-    parser.add_argument('-s', '--schedule', action='store_true', help='Run daily at POST_TIME from .env')
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-q', '--question', type=str)
+    parser.add_argument('-s', '--schedule', action='store_true')
     args = parser.parse_args()
 
+    trending_prompts = [
+        "Top 5 smart home trends in 2025",
+        "Why Home Assistant beats Alexa for privacy",
+        "How to set up smart routines with motion sensors",
+        "Voice-controlled lighting: pros and cons",
+        "Energy-saving automation tips for beginners",
+        "How to use presence detection with smart plugs",
+        "Best security automations for your smart home"
+    ]
     prompt = args.question or random.choice(trending_prompts)
     logger.info(f"📢 Prompt used: {prompt}")
+
+    def safe_calendar(action: str) -> str:
+        logger.info(f"Calendar stub: {action}")
+        return f"Calendar stub: {action}"
+
+    def safe_db(query: str) -> str:
+        logger.info(f"DB stub: {query}")
+        return f"DB stub: {query}"
+
+    tools = [
+        Tool(name='Calendar', func=safe_calendar, description='Calendar stub'),
+        Tool(name='Database', func=safe_db, description='Database stub'),
+        Tool(name='BlogPost', func=safe_blog_post, description='Publish blog to GitHub')
+    ]
 
     llm = ChatOpenAI(
         openai_api_key=API_KEY,
@@ -181,13 +183,6 @@ if __name__ == '__main__':
         model_name=MODEL_ID,
         temperature=0.7
     )
-
-    tools = [
-       # Tool(name='Search', func=safe_search, description='Web search'),
-        Tool(name='Calendar', func=safe_calendar, description='Calendar stub'),
-        Tool(name='Database', func=safe_db, description='Database stub'),
-        Tool(name='BlogPost', func=safe_blog_post, description='Publish blog to GitHub')
-    ]
 
     agent = initialize_agent(
         tools=tools,
@@ -197,29 +192,12 @@ if __name__ == '__main__':
         handle_parsing_errors=True
     )
 
-def generate_publish(current_prompt):
-    logger.info('Generating blog post...')
-    try:
-        logger.info(f"Prompting agent with: {current_prompt}")
-        content = agent.run(current_prompt)
-
-        if not content or "i am sorry" in content.lower() or "i cannot" in content.lower():
-            logger.warning("⚠️ AI output was a refusal or empty. Skipping post.")
-            return
-
-        result = safe_blog_post(content)
-        logger.info(result)
-        print(result)
-    except Exception as e:
-        logger.error(f"Generation failed: {e}")
-
-
-if args.schedule:
-    post_time = os.getenv('POST_TIME', '08:00')
-    schedule.every().day.at(post_time).do(lambda: generate_publish(prompt))
-    logger.info(f"Scheduled daily post at {post_time}")
-    while True:
-        schedule.run_pending()
-        time.sleep(60)
-else:
-    generate_publish(prompt)
+    if args.schedule:
+        post_time = os.getenv('POST_TIME', '08:00')
+        schedule.every().day.at(post_time).do(lambda: generate_publish(prompt))
+        logger.info(f"Scheduled to run daily at {post_time}")
+        while True:
+            schedule.run_pending()
+            time.sleep(60)
+    else:
+        generate_publish(prompt)
