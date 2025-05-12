@@ -5,7 +5,7 @@ import time
 from openai import OpenAI
 
 # —–– CONFIG —––––––––––––––––––––––––––––––––––––––––––––––––––––
-GOOGLE_API_KEY = "***REMOVED***"
+GOOGLE_API_KEY = "AIzaSyB89UsYeFez-Gt3NeZoNftUht9rJ38IriA"
 MODEL_ID        = "gemini-2.5-flash-preview-04-17"
 SYSTEM_PROMPT   = "You are a helpful assistant."
 USER_QUESTION   = "Give me a summary of today's top tech news."
