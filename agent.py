@@ -106,7 +106,7 @@ def safe_blog_post(content: str) -> str:
         f"description: \"{description}\"\n"
         f"date: \"{datetime.utcnow().isoformat()}Z\"\n"
         f"slug: \"{slug}\"\n"
-        f"published: true\n"
+        f"published: false\n"
         f"tags: {tags}\n"
         f"---\n\n"
     )
